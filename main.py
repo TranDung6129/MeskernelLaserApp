@@ -14,7 +14,7 @@ def run_bluetooth_gui():
     """Chạy giao diện Bluetooth GUI"""
     try:
         from bluetooth_gui import main as gui_main
-        print("Khởi động giao diện Bluetooth GUI...")
+        # Start Bluetooth GUI
         gui_main()
     except ImportError as e:
         print(f"Lỗi import GUI: {e}")
@@ -172,7 +172,7 @@ Examples:
     parser.add_argument(
         '--version', '-v',
         action='version',
-        version='Laser Device Manager v1.0.0'
+        version='Laser Device Manager v2.0.0'
     )
     
     args = parser.parse_args()

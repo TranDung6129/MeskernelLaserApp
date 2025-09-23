@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import pyqtSlot
 
-from ..mqtt.mqtt_publisher import MQTTPublisher
+from ...mqtt.mqtt_publisher import MQTTPublisher
 
 
 class MQTTPanel(QWidget):

@@ -1,4 +1,4 @@
-## Laser Device Manager (Bluetooth + MQTT)
+## Laser Device Manager (Bluetooth + MQTT) — v2.0.0
 
 Ứng dụng quản lý/giám sát cảm biến laser Meskernel (LDJ100-755) bằng Python.
 
@@ -71,6 +71,9 @@ requirements.txt
 ### Ghi chú
 - Nếu cài `pybluez` lỗi trên Linux, đảm bảo đã cài `libbluetooth-dev` rồi mới `pip install pybluez`.
 - Nếu không dùng Bluetooth, có thể chạy chế độ MQTT/Serial chỉ với `pyserial` + `paho-mqtt`.
+
+### Phiên bản
+- Current version: 2.0.0
 
 ### Bản quyền
 © 2025 Aitogy. Dùng nội bộ hoặc theo thỏa thuận dự án.

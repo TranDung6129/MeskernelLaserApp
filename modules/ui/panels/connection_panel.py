@@ -8,8 +8,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtCore import pyqtSignal, pyqtSlot, Qt
-from ..bluetooth import BluetoothDevice
-from .device_list_widget import DeviceListWidget
+from ...bluetooth import BluetoothDevice
+from ..widgets import DeviceListWidget
 
 class ConnectionPanel(QWidget):
     """Panel điều khiển kết nối Bluetooth"""

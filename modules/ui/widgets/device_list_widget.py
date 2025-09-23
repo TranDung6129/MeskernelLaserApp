@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QListWidgetItem, QProgressBar, QSpinBox, QLabel, QGroupBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
-from ..bluetooth import BluetoothDevice
+from ...bluetooth import BluetoothDevice
 
 class DeviceListWidget(QWidget):
     """Widget hiển thị và quản lý danh sách thiết bị Bluetooth"""

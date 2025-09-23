@@ -23,11 +23,9 @@ from ..sensor.constants import (
     LEN_LASER_CONTROL_RESPONSE,
     HEADER,
 )
-from .connection_panel import ConnectionPanel
-from .communication_panel import CommunicationPanel
-from .charts_panel import ChartsPanel # type: ignore
-from .mqtt_panel import MQTTPanel
-from .geotech_panel import GeotechPanel
+from .panels import ConnectionPanel, CommunicationPanel, ChartsPanel, MQTTPanel
+from .geotech import GeotechPanel
+from .geotech.replay_dialog import ReplayDialog
 
 class ToggleSplitterHandle(QSplitterHandle):
     def __init__(self, orientation, splitter, host_window):
@@ -114,10 +112,6 @@ class BluetoothMainWindow(QMainWindow):
         main_layout = QHBoxLayout(central_widget)
         splitter = ToggleSplitter(Qt.Orientation.Horizontal, self)
         self.splitter = splitter
-        try:
-            self.splitter.setCollapsible(0, True)
-        except Exception:
-            pass
         main_layout.addWidget(splitter)
         # Track left panel sizing for collapse/restore
         self._left_panel_width_prev = 220
@@ -143,6 +137,13 @@ class BluetoothMainWindow(QMainWindow):
         self.tab_widget.addTab(self.geotech_panel, "Phân Tích Khoan")
         
         splitter.addWidget(self.tab_widget)
+        
+        # Set collapsible properties after widgets are added
+        try:
+            self.splitter.setCollapsible(0, True)
+        except Exception:
+            pass
+        
         splitter.setSizes([220, 1180])
         
         # Status bar
@@ -186,6 +187,9 @@ class BluetoothMainWindow(QMainWindow):
         self.data_processor.statistics_updated.connect(self.charts_panel.update_statistics)
         self.data_processor.statistics_updated.connect(self.mqtt_panel.on_statistics_updated)
         self.data_processor.statistics_updated.connect(self.geotech_panel.on_statistics_updated)
+        
+        # Kết nối signal reset session từ geotech form đến data processor
+        self.geotech_panel.form_widget.session_started.connect(self.data_processor.reset_recording_session)
 
         # Wire DataProcessor into ChartsPanel widgets that need it
         try:
@@ -204,6 +208,12 @@ class BluetoothMainWindow(QMainWindow):
         self.act_export_csv.setShortcut(QKeySequence("Ctrl+E"))
         self.act_export_csv.triggered.connect(self._action_export_csv)
         file_menu.addAction(self.act_export_csv)
+
+        # Debug menu item để tạo dữ liệu mẫu (chỉ trong development)
+        # Test-only action removed in production
+        
+        # Test menu item để lưu dữ liệu geotech
+        # Test-only action removed in production
 
         self.act_clear_data = QAction("Xoá dữ liệu", self)
         self.act_clear_data.setShortcut(QKeySequence("Ctrl+L"))
@@ -360,6 +370,16 @@ class BluetoothMainWindow(QMainWindow):
     # === Menu actions handlers ===
     def _action_export_csv(self):
         try:
+            # Kiểm tra có dữ liệu không
+            data_count = len(self.data_processor.measurements)
+            if data_count == 0:
+                QMessageBox.information(
+                    self, 
+                    "Không có dữ liệu", 
+                    "Chưa có dữ liệu đo để xuất.\nVui lòng kết nối thiết bị và thực hiện đo trước."
+                )
+                return
+            
             default_path, _ = QFileDialog.getSaveFileName(
                 self,
                 "Xuất dữ liệu CSV",
@@ -368,13 +388,170 @@ class BluetoothMainWindow(QMainWindow):
             )
             if not default_path:
                 return
+                
+            # Hiển thị thông tin trước khi export
+            self.status_bar.showMessage(f"Đang xuất {data_count} dữ liệu đo...")
+            
             ok = self.data_processor.export_data_csv(default_path)
             if ok:
-                QMessageBox.information(self, "Thành công", f"Đã xuất dữ liệu: {default_path}")
+                QMessageBox.information(
+                    self, 
+                    "Xuất dữ liệu thành công", 
+                    f"Đã xuất {data_count} dữ liệu đo vào:\n{default_path}"
+                )
+                self.status_bar.showMessage(f"Đã xuất {data_count} dữ liệu thành công")
             else:
-                QMessageBox.warning(self, "Lỗi", "Không thể xuất dữ liệu")
+                QMessageBox.warning(
+                    self, 
+                    "Lỗi xuất dữ liệu", 
+                    "Không thể xuất dữ liệu.\nVui lòng kiểm tra quyền ghi file và thử lại."
+                )
+                self.status_bar.showMessage("Xuất dữ liệu thất bại")
         except Exception as e:
             QMessageBox.critical(self, "Lỗi", f"Xuất dữ liệu thất bại: {e}")
+            self.status_bar.showMessage("Xuất dữ liệu thất bại")
+
+    def _action_generate_sample_data(self):
+        """Tạo dữ liệu mẫu để test export CSV"""
+        try:
+            import time
+            import random
+            from ..processing import MeasurementData
+            
+            reply = QMessageBox.question(
+                self,
+                "Tạo dữ liệu mẫu",
+                "Tạo dữ liệu mẫu để test tính năng export?\nDữ liệu hiện tại sẽ bị xóa.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.No:
+                return
+            
+            # Clear existing data
+            self.data_processor.clear_data()
+            
+            # Generate sample data
+            base_time = time.time()
+            sample_count = 100
+            
+            self.status_bar.showMessage(f"Đang tạo {sample_count} dữ liệu mẫu...")
+            
+            for i in range(sample_count):
+                # Simulate realistic laser measurement data
+                timestamp = base_time + i * 0.1  # 100ms intervals
+                distance_mm = 1000 + random.uniform(-50, 200)  # 1m ± variations
+                signal_quality = random.randint(70, 100)
+                velocity_ms = random.uniform(-0.5, 0.5) if i > 5 else 0.0
+                
+                measurement = MeasurementData(
+                    timestamp=timestamp,
+                    distance_mm=distance_mm,
+                    signal_quality=signal_quality
+                )
+                
+                # Add to data processor
+                self.data_processor.add_measurement(
+                    distance_mm,
+                    signal_quality,
+                    velocity_ms=velocity_ms,
+                    timestamp=timestamp
+                )
+            
+            # Update UI
+            self.data_processor.statistics_updated.emit(self.data_processor.get_current_stats())
+            
+            QMessageBox.information(
+                self,
+                "Dữ liệu mẫu",
+                f"Đã tạo {sample_count} dữ liệu mẫu.\nBây giờ bạn có thể test export CSV."
+            )
+            self.status_bar.showMessage(f"Đã tạo {sample_count} dữ liệu mẫu")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", f"Không thể tạo dữ liệu mẫu: {e}")
+
+    def _action_save_geotech_data(self):
+        """Test action to save geotech drilling data"""
+        try:
+            # Check if geotech tab is active
+            current_tab_index = self.tab_widget.currentIndex()
+            if current_tab_index != 3:  # Geotech tab index
+                reply = QMessageBox.question(
+                    self,
+                    "Chuyển tab",
+                    "Chức năng này yêu cầu tab 'Phân Tích Khoan'.\nBạn có muốn chuyển đến tab đó không?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.tab_widget.setCurrentIndex(3)
+                else:
+                    return
+            
+            # Check if there's data to save
+            if not self.geotech_panel.depth_series_m:
+                reply = QMessageBox.question(
+                    self,
+                    "Không có dữ liệu",
+                    "Không có dữ liệu hố khoan để lưu.\nBạn có muốn tạo dữ liệu mẫu để test không?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self._generate_geotech_sample_data()
+                else:
+                    return
+            
+            # Trigger save via geotech form
+            self.geotech_panel.form_widget.trigger_save()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", f"Không thể lưu dữ liệu hố khoan: {e}")
+            
+    def _generate_geotech_sample_data(self):
+        """Generate sample drilling data for geotech panel"""
+        try:
+            import random
+            import time
+            
+            sample_count = 50
+            base_time = time.time()
+            
+            # Clear existing data
+            self.geotech_panel.depth_series_m.clear()
+            self.geotech_panel.velocity_series_ms.clear()
+            self.geotech_panel.quality_series.clear()
+            self.geotech_panel.time_series.clear()
+            self.geotech_panel.state_series.clear()
+            
+            # Generate sample drilling data
+            current_depth = 0.0
+            for i in range(sample_count):
+                timestamp = base_time + i * 2.0  # 2 second intervals
+                
+                # Simulate drilling progression
+                depth_increment = random.uniform(0.01, 0.05)  # 1-5cm per measurement
+                current_depth += depth_increment
+                
+                velocity = random.uniform(-0.2, 0.8)  # drilling velocity
+                quality = random.randint(70, 100)
+                state = "Khoan" if velocity > 0.1 else "Dừng"
+                
+                self.geotech_panel.depth_series_m.append(current_depth)
+                self.geotech_panel.velocity_series_ms.append(velocity)
+                self.geotech_panel.quality_series.append(quality)
+                self.geotech_panel.time_series.append(timestamp)
+                self.geotech_panel.state_series.append(state)
+            
+            # Update charts and stats
+            self.geotech_panel._refresh_all_plots()
+            
+            self.status_bar.showMessage(f"Đã tạo {sample_count} dữ liệu mẫu hố khoan")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", f"Không thể tạo dữ liệu mẫu hố khoan: {e}")
 
     def _action_clear_data(self):
         try:
@@ -446,7 +623,7 @@ class BluetoothMainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Giới thiệu",
-                "Laser Device Manager\nPhiên bản 1.0.0\n\nAitogy"
+                "Laser Device Manager\nPhiên bản 2.0.0\n\nAitogy"
             )
         except Exception:
             pass
@@ -512,20 +689,63 @@ class BluetoothMainWindow(QMainWindow):
         
     def _connect_worker(self, address: str, port: Optional[int]):
         """Worker để kết nối trong thread riêng"""
-        success = self.bluetooth_manager.connect_to_device(address, port)
-        if not success:
-            # Reset connecting state if failed
-            self.connection_panel.set_connecting_state(False)
+        try:
+            # Thread safety check - ensure bluetooth_manager still exists
+            if not hasattr(self, 'bluetooth_manager') or self.bluetooth_manager is None:
+                return
+            
+            # Keep a local reference to prevent garbage collection during this call
+            bluetooth_mgr = self.bluetooth_manager
+            if bluetooth_mgr is None:
+                return
+                
+            success = bluetooth_mgr.connect_to_device(address, port)
+            if not success:
+                # Reset connecting state if failed - use signal/slot for thread safety  
+                try:
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(0, lambda: self.connection_panel.set_connecting_state(False))
+                except Exception:
+                    pass
+        except RuntimeError as e:
+            # Handle the case where the C++ object has been deleted
+            print(f"BluetoothManager object was deleted during connection attempt: {e}")
+            # Try to reset UI state safely
+            try:
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, lambda: self.connection_panel.set_connecting_state(False))
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"Unexpected error in connection worker: {e}")
+            try:
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, lambda: self.connection_panel.set_connecting_state(False))
+            except Exception:
+                pass
             
     @pyqtSlot()
     def _handle_disconnection_request(self):
         """Xử lý yêu cầu ngắt kết nối"""
-        self.bluetooth_manager.disconnect()
+        try:
+            if hasattr(self, 'bluetooth_manager') and self.bluetooth_manager is not None:
+                self.bluetooth_manager.disconnect()
+        except RuntimeError:
+            pass
+        except Exception:
+            pass
         
     @pyqtSlot(int)
     def _handle_scan_request(self, duration: int):
         """Xử lý yêu cầu quét thiết bị"""
-        if self.bluetooth_manager.is_scanning:
+        try:
+            if not hasattr(self, 'bluetooth_manager') or self.bluetooth_manager is None:
+                return
+            if self.bluetooth_manager.is_scanning:
+                return
+        except RuntimeError:
+            return
+        except Exception:
             return
             
         self.connection_panel.clear_device_list()
@@ -545,7 +765,21 @@ class BluetoothMainWindow(QMainWindow):
         
     def _scan_worker(self, duration: int):
         """Worker để quét thiết bị trong thread riêng"""
-        self.bluetooth_manager.scan_devices(duration)
+        try:
+            # Thread safety check - ensure bluetooth_manager still exists
+            if not hasattr(self, 'bluetooth_manager') or self.bluetooth_manager is None:
+                return
+            
+            # Keep a local reference to prevent garbage collection during this call
+            bluetooth_mgr = self.bluetooth_manager
+            if bluetooth_mgr is None:
+                return
+                
+            bluetooth_mgr.scan_devices(duration)
+        except RuntimeError:
+            pass
+        except Exception:
+            pass
         
     def _scan_finished(self):
         """Callback khi quét xong"""
@@ -555,14 +789,23 @@ class BluetoothMainWindow(QMainWindow):
     @pyqtSlot(str)
     def _handle_send_request(self, data: str):
         """Xử lý yêu cầu gửi dữ liệu raw"""
-        if not self.bluetooth_manager.is_connected():
-            self._show_error("Chưa kết nối đến thiết bị")
-            return
-            
-        if self.bluetooth_manager.send_data(data):
-            self.communication_panel.on_data_sent(data)
-        else:
-            self._show_error("Không thể gửi dữ liệu")
+        try:
+            if not hasattr(self, 'bluetooth_manager') or self.bluetooth_manager is None:
+                self._show_error("Chưa kết nối đến thiết bị")
+                return
+                
+            if not self.bluetooth_manager.is_connected():
+                self._show_error("Chưa kết nối đến thiết bị")
+                return
+                
+            if self.bluetooth_manager.send_data(data):
+                self.communication_panel.on_data_sent(data)
+            else:
+                self._show_error("Không thể gửi dữ liệu")
+        except RuntimeError:
+            self._show_error("Kết nối bị ngắt trong khi gửi dữ liệu")
+        except Exception as e:
+            self._show_error(f"Không thể gửi dữ liệu: {e}")
             
     @pyqtSlot(str)
     def _handle_device_command(self, command_type: str):
@@ -592,7 +835,7 @@ class BluetoothMainWindow(QMainWindow):
                 
         except ValueError:
             self._show_error(f"Lệnh không hợp lệ: {command_type}")
-            
+    
     # === Bluetooth Manager Event Handlers ===
     
     @pyqtSlot(BluetoothDevice)
@@ -633,9 +876,16 @@ class BluetoothMainWindow(QMainWindow):
             cmd = commands[index]
             self.last_command_type = cmd.command_type.value
             cmd_bytes = cmd.to_bytes()
-            if cmd_bytes and self.bluetooth_manager and self.bluetooth_manager.socket:
+            
+            # Thread safety checks
+            if (cmd_bytes and 
+                hasattr(self, 'bluetooth_manager') and 
+                self.bluetooth_manager is not None and 
+                self.bluetooth_manager.socket is not None):
                 self.bluetooth_manager.socket.send(cmd_bytes)
-            QTimer.singleShot(300, lambda: self._send_query_sequence(commands, index + 1))
+                QTimer.singleShot(300, lambda: self._send_query_sequence(commands, index + 1))
+        except RuntimeError:
+            self.communication_panel.add_log_message(f"Kết nối bị ngắt trong khi truy vấn thiết bị", "WARNING")
         except Exception as e:
             self.communication_panel.add_log_message(f"Lỗi gửi truy vấn: {e}", "WARNING")
         
@@ -853,35 +1103,111 @@ class BluetoothMainWindow(QMainWindow):
     
     def closeEvent(self, event: QCloseEvent):
         """Xử lý khi đóng cửa sổ"""
-        if self.bluetooth_manager.is_connected():
-            reply = QMessageBox.question(
-                self, 
-                "Xác nhận", 
-                "Bạn có muốn ngắt kết nối trước khi thoát?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            
-            if reply == QMessageBox.StandardButton.Yes:
-                self.bluetooth_manager.disconnect()
-        # Đảm bảo ngắt MQTT nếu đang bật
         try:
-            self.mqtt_panel.disconnect()
-        except Exception:
-            pass
+            # Kiểm tra xem có kết nối Bluetooth không
+            has_bluetooth_connection = False
+            try:
+                if hasattr(self, 'bluetooth_manager') and self.bluetooth_manager is not None:
+                    has_bluetooth_connection = self.bluetooth_manager.is_connected()
+            except (RuntimeError, AttributeError):
+                has_bluetooth_connection = False
+            
+            # Popup thống nhất cho cả hai trường hợp
+            if has_bluetooth_connection:
+                # Trường hợp đang kết nối - 3 tùy chọn
+                message = "Bạn đang kết nối với thiết bị Bluetooth.\nBạn có muốn ngắt kết nối trước khi thoát không?\n\nDữ liệu đã được lưu tự động."
+                buttons = QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel
+                default_button = QMessageBox.StandardButton.Cancel
                 
-        event.accept()
+                # Tùy chỉnh text của các nút
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("Xác nhận thoát")
+                msg_box.setText(message)
+                msg_box.setIcon(QMessageBox.Icon.Question)
+                msg_box.setStandardButtons(buttons)
+                msg_box.setDefaultButton(default_button)
+                
+                # Tùy chỉnh text của buttons để rõ nghĩa hơn
+                msg_box.button(QMessageBox.StandardButton.Yes).setText("Ngắt kết nối và thoát")
+                msg_box.button(QMessageBox.StandardButton.No).setText("Giữ kết nối và thoát") 
+                msg_box.button(QMessageBox.StandardButton.Cancel).setText("Hủy bỏ")
+                
+                reply = msg_box.exec()
+                
+                if reply == QMessageBox.StandardButton.Yes:
+                    # Ngắt kết nối trước khi thoát
+                    try:
+                        if hasattr(self, 'bluetooth_manager') and self.bluetooth_manager is not None:
+                            self.bluetooth_manager.disconnect()
+                            # Chờ một chút để ngắt kết nối hoàn tất
+                            import time
+                            time.sleep(0.5)
+                    except (RuntimeError, AttributeError):
+                        pass
+                elif reply == QMessageBox.StandardButton.No:
+                    # Giữ kết nối và thoát luôn
+                    pass
+                else:  # Cancel hoặc đóng dialog
+                    # Hủy thoát
+                    event.ignore()
+                    return
+            else:
+                # Trường hợp không kết nối - 2 tùy chọn
+                reply = QMessageBox.question(
+                    self, 
+                    "Xác nhận thoát", 
+                    "Bạn có chắc chắn muốn thoát ứng dụng không?\nDữ liệu đã được lưu tự động.",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                
+                if reply == QMessageBox.StandardButton.No:
+                    event.ignore()
+                    return
+                    
+            # Đảm bảo ngắt MQTT nếu đang bật
+            try:
+                self.mqtt_panel.disconnect()
+            except Exception:
+                pass
+            
+            # Cleanup bluetooth manager to prevent lingering references
+            try:
+                if hasattr(self, 'bluetooth_manager') and self.bluetooth_manager is not None:
+                    # Ensure all connections are disconnected before cleanup
+                    if hasattr(self.bluetooth_manager, 'disconnect'):
+                        self.bluetooth_manager.disconnect()
+                    # Clear the reference
+                    self.bluetooth_manager = None
+            except Exception:
+                pass
+                    
+            event.accept()
+            
+        except Exception:
+            event.accept()
         
     # === Public Methods ===
     
-    def get_bluetooth_manager(self) -> BluetoothManager:
+    def get_bluetooth_manager(self) -> Optional[BluetoothManager]:
         """Lấy bluetooth manager"""
-        return self.bluetooth_manager
+        return self.bluetooth_manager if hasattr(self, 'bluetooth_manager') else None
         
     def is_connected(self) -> bool:
         """Kiểm tra trạng thái kết nối"""
-        return self.bluetooth_manager.is_connected()
+        try:
+            if hasattr(self, 'bluetooth_manager') and self.bluetooth_manager is not None:
+                return self.bluetooth_manager.is_connected()
+            return False
+        except (RuntimeError, AttributeError):
+            return False
         
     def get_connected_device_address(self) -> Optional[str]:
         """Lấy địa chỉ thiết bị đang kết nối"""
-        device = self.bluetooth_manager.get_connected_device()
-        return device.address if device else None
+        try:
+            if hasattr(self, 'bluetooth_manager') and self.bluetooth_manager is not None:
+                device = self.bluetooth_manager.get_connected_device()
+                return device.address if device else None
+            return None
+        except (RuntimeError, AttributeError):
+            return None

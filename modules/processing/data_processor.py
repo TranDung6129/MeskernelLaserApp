@@ -227,18 +227,64 @@ class DataProcessor(QObject):
             'velocity_threshold': self.stats.get('velocity_threshold', 0.005),
         }
         
+    def reset_recording_session(self):
+        """Reset chỉ timer và thống kê liên quan đến recording, giữ lại dữ liệu đo"""
+        # Reset state detector để bắt đầu đếm thời gian từ đầu
+        self.state_detector.reset()
+        
+        # Reset các thống kê liên quan đến session recording
+        self.stats.update({
+            'total_samples': 0,
+            'state': 'Dừng',
+            'time_drilling_s': 0.0,
+            'time_stopped_s': 0.0,
+            'efficiency_percent': 0.0,
+            'avg_velocity': 0.0,
+            'min_velocity': 0.0,
+            'max_velocity': 0.0,
+        })
+        
+        # Clear recent velocities để tính lại từ đầu
+        self.recent_velocities.clear()
+        
     def export_data_csv(self, filename: str) -> bool:
         """Export dữ liệu ra file CSV"""
         try:
             import csv
-            with open(filename, 'w', newline='') as csvfile:
-                fieldnames = ['timestamp', 'depth_m', 'distance_mm', 'velocity_ms', 'state', 'signal_quality', 'voltage', 'temperature']
+            from datetime import datetime
+            import os
+            
+            # Kiểm tra quyền ghi vào thư mục
+            directory = os.path.dirname(filename) or '.'
+            if not os.access(directory, os.W_OK):
+                print(f"Export error: Không có quyền ghi vào thư mục {directory}")
+                return False
+            
+            # Kiểm tra có dữ liệu không
+            if not self.measurements:
+                print("Export error: Không có dữ liệu để xuất")
+                return False
+            
+            # Start exporting CSV
+            
+            with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = [
+                    'timestamp', 'datetime', 'depth_m', 'distance_mm', 
+                    'velocity_ms', 'state', 'signal_quality', 'voltage', 'temperature'
+                ]
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
                 
-                for measurement in self.measurements:
+                for i, measurement in enumerate(self.measurements):
+                    # Chuyển timestamp thành datetime string để dễ đọc
+                    try:
+                        dt_str = datetime.fromtimestamp(measurement.timestamp).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                    except (ValueError, OSError):
+                        dt_str = str(measurement.timestamp)
+                    
                     writer.writerow({
                         'timestamp': measurement.timestamp,
+                        'datetime': dt_str,
                         'depth_m': f"{measurement.distance_m:.6f}",
                         'distance_mm': measurement.distance_mm,
                         'velocity_ms': f"{measurement.velocity_ms:.6f}" if measurement.velocity_ms is not None else '',
@@ -247,7 +293,16 @@ class DataProcessor(QObject):
                         'voltage': measurement.voltage or '',
                         'temperature': measurement.temperature or ''
                     })
+                    
+                    # Progress feedback cho file lớn
+                    # Progress each 1000 rows (silent)
+            
+            # Export CSV success
             return True
-        except Exception as e:
-            print(f"Export error: {e}")
+            
+        except PermissionError as e:
+            return False
+        except FileNotFoundError as e:
+            return False
+        except Exception:
             return False

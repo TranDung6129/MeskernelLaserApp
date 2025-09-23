@@ -142,7 +142,7 @@ class BluetoothManager(QObject):
         
         try:
             if not self._use_serial_backend and self._pybluez_available:
-                print(f"Đang quét thiết bị Bluetooth trong {duration} giây...")
+                # Scanning bluetooth devices
                 nearby_devices = bluetooth.discover_devices(  # type: ignore[attr-defined]
                     duration=duration, 
                     lookup_names=True, 
@@ -156,7 +156,7 @@ class BluetoothManager(QObject):
                 # Windows + không có PyBluez: duyệt COM ports để tìm SPP
                 if list_ports is None:
                     raise RuntimeError("Không thể liệt kê cổng serial (pyserial thiếu)")
-                print("Đang liệt kê cổng COM có thể là Bluetooth SPP...")
+                # Listing COM ports that may be Bluetooth SPP
                 for port in list_ports.comports():
                     description = port.description or "Serial Port"
                     # Heuristic: Windows thường hiển thị "Standard Serial over Bluetooth link"
@@ -192,14 +192,14 @@ class BluetoothManager(QObject):
             if self._use_serial_backend or not self._pybluez_available:
                 return []
 
-            print(f"Đang tìm dịch vụ trên thiết bị {device_address}...")
+            # Finding services on device
             services = bluetooth.find_service(  # type: ignore[attr-defined]
                 uuid="00001101-0000-1000-8000-00805f9b34fb",
                 address=device_address
             )
             if not services:
                 services = bluetooth.find_service(address=device_address)  # type: ignore[attr-defined]
-            print(f"Tìm thấy {len(services)} dịch vụ")
+            # Found services
             return services
         except Exception as e:
             error_msg = f"Lỗi khi tìm dịch vụ: {str(e)}"
@@ -234,18 +234,18 @@ class BluetoothManager(QObject):
                         return False
                     port = services[0].get("port", 1)
 
-                print(f"Đang kết nối đến {device_address} trên port {port} (PyBluez)...")
+                # Connecting via PyBluez
                 self.socket = bluetooth.BluetoothSocket(bluetooth.RFCOMM)  # type: ignore[attr-defined]
                 self.socket.connect((device_address, port))
             else:
                 # Windows/COM hoặc người dùng nhập COMx
                 com_port = device_address
                 baudrate = DEFAULT_SERIAL_BAUDRATE
-                print(f"Đang kết nối đến {com_port} (Serial/COM, {baudrate} bps)...")
+                # Connecting via Serial/COM
                 self.socket = SerialSocketAdapter(com_port, baudrate=baudrate, timeout=1.0)
 
             self.connected_device = BluetoothDevice(device_address)
-            print("Kết nối thành công")
+            # Connected
             # Bắt đầu thread nhận dữ liệu
             self.start_receive_thread()
             self.connection_established.emit(device_address)
@@ -265,7 +265,7 @@ class BluetoothManager(QObject):
         """Ngắt kết nối Bluetooth"""
         if self.socket:
             try:
-                print("Đang ngắt kết nối...")
+                # Disconnecting
                 self.stop_receive = True
                 
                 if self.receive_thread and self.receive_thread.is_alive():
@@ -278,10 +278,10 @@ class BluetoothManager(QObject):
                     self.connection_lost.emit(self.connected_device.address)
                     self.connected_device = None
                     
-                print("Đã ngắt kết nối")
+                # Disconnected
                 
-            except Exception as e:
-                print(f"Lỗi khi ngắt kết nối: {e}")
+            except Exception:
+                pass
     
     def send_data(self, data: str) -> bool:
         """
@@ -336,7 +336,7 @@ class BluetoothManager(QObject):
                 self.error_occurred.emit(error_msg)
                 break
         
-        print("Thread nhận dữ liệu đã dừng")
+        # Receive thread stopped
     
     def is_connected(self) -> bool:
         """Kiểm tra trạng thái kết nối"""

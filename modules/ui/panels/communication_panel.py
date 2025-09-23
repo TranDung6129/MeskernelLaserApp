@@ -295,7 +295,7 @@ class CommunicationPanel(QWidget):
         
     def on_command_sent(self, command_bytes: bytes, command_description: str):
         """Xử lý khi gửi lệnh (bytes)"""
-        from ..core.response_parser import MeskernelResponseParser
+        from ...core.response_parser import MeskernelResponseParser
         
         # Hiển thị hex trong data box
         hex_string = MeskernelResponseParser.bytes_to_hex_string(command_bytes)
