@@ -22,7 +22,15 @@ from .data_selector_dialog import DataSelectorDialog
 
 
 class GeotechFormWidget(QWidget):
-    """Widget form thông tin hố khoan cho Geotech Panel"""
+    """
+    Widget form thông tin hố khoan cho Geotech Panel
+    
+    CHÍNH SÁCH:
+    - BẮT BUỘC phải chọn dự án và hố khoan trước khi ghi dữ liệu
+    - KHÔNG CHO PHÉP auto-create placeholder (tạo tự động)
+    - Người dùng phải chọn/tạo hole thủ công
+    - Nếu không có dự án/hố khoan, sẽ báo lỗi và từ chối lưu
+    """
     # Tín hiệu khi bắt đầu/dừng ghi dữ liệu
     recording_started = pyqtSignal(dict)  # Chứa thông tin cấu hình ghi
     recording_stopped = pyqtSignal()      # Khi dừng ghi
@@ -183,8 +191,32 @@ class GeotechFormWidget(QWidget):
         """Mở hộp thoại quản lý hố khoan"""
         if not self.project_manager.current_project:
             return
+        
+        # Lấy GNSS service từ parent/mqtt_panel
+        gnss_service = None
+        parent = self.parent()
+        
+        # Thử lấy từ parent.gnss_service
+        if parent and hasattr(parent, 'gnss_service'):
+            gnss_service = parent.gnss_service
+            print(f"DEBUG: Tìm thấy gnss_service từ parent: {gnss_service}")
+        # Thử lấy từ parent.mqtt_panel.gnss_service
+        elif parent and hasattr(parent, 'mqtt_panel'):
+            mqtt_panel = parent.mqtt_panel
+            if mqtt_panel and hasattr(mqtt_panel, 'gnss_service'):
+                gnss_service = mqtt_panel.gnss_service
+                print(f"DEBUG: Tìm thấy gnss_service từ mqtt_panel: {gnss_service}")
+        
+        if gnss_service:
+            print(f"INFO: GNSS service đã được truyền vào HoleDialog")
+        else:
+            print(f"WARNING: Không tìm thấy GNSS service - các nút GPS sẽ bị disable")
             
-        dialog = HoleDialog(self.project_manager, self)
+        dialog = HoleDialog(
+            self.project_manager, 
+            self,
+            gnss_service=gnss_service  # Truyền GNSS service vào
+        )
         if dialog.exec():
             # Đã chọn một hố khoan
             hole = dialog.get_selected_hole()
@@ -513,38 +545,24 @@ class GeotechFormWidget(QWidget):
         
         return str(hole_dir)
     
-    def _auto_create_project_and_hole(self):
-        """Tự động tạo dự án và hố khoan mặc định nếu chưa có"""
-        try:
-            # Auto-create project if none exists
-            if not self.project_manager.current_project:
-                from datetime import datetime
-                project_name = f"Project_{datetime.now().strftime('%Y%m%d')}"
-            # Auto-creating project
-                self.project_manager.create_project(project_name, "Auto-created project")
-            
-            # Auto-create hole if none exists
-            if not self.project_manager.current_hole:
-                from datetime import datetime
-                hole_name = f"Hole_{datetime.now().strftime('%H%M%S')}"
-                # Auto-creating hole
-                self.project_manager.create_hole(hole_name, "Auto-created for data saving")
-                
-            return True
-        except Exception:
-            return False
+    # REMOVED: _auto_create_project_and_hole()
+    # KHÔNG CHO PHÉP tự động tạo placeholder
+    # Người dùng PHẢI chọn/tạo thủ công
 
     def get_save_path(self) -> str:
         """Lấy đường dẫn lưu file CSV"""
-        # Try auto-create if missing
+        # BẮT BUỘC: Phải có dự án và hố khoan
         if not self.project_manager.current_project or not self.project_manager.current_hole:
-            if not self._auto_create_project_and_hole():
-                QMessageBox.warning(
-                    self, 
-                    "Không thể tạo dự án", 
-                    "Không thể tự động tạo dự án/hố khoan.\nVui lòng tạo thủ công trước khi lưu."
-                )
-                return ""
+            QMessageBox.critical(
+                self, 
+                "Chưa chọn dự án/hố khoan", 
+                "❌ BẮT BUỘC: Phải chọn dự án và hố khoan trước khi lưu dữ liệu.\n\n"
+                "Vui lòng:\n"
+                "1. Chọn/tạo dự án trong Quản lý dự án\n"
+                "2. Chọn hoặc tạo hố khoan trong Quản lý hố khoan\n\n"
+                "⚠️ Lưu ý: Không được tạo tự động, phải chọn thủ công."
+            )
+            return ""
         
         # Validate prerequisites
         project = self.project_manager.current_project

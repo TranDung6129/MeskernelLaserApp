@@ -4,6 +4,7 @@ Project Manager - Quản lý dự án và hố khoan
 import os
 import json
 import csv
+import shutil
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
@@ -289,3 +290,59 @@ class ProjectManager:
         filepath = project_dir / "holes" / hole_name / filename
         
         return filepath if filepath.exists() else None
+
+    def delete_hole(self, hole_name: str, hole_path: str = None) -> bool:
+        """Xóa hố khoan khỏi dự án hiện tại"""
+        if not self.current_project:
+            return False
+            
+        # Nếu có hole_path, dùng nó luôn
+        if hole_path:
+            hole_dir = Path(hole_path)
+        else:
+            # Fallback: cố gắng tìm hole_dir từ tên
+            project_dir = Path(self.current_project["path"])
+            
+            # Tái tạo tên thư mục safe_name từ hole_name
+            # Lưu ý: Logic này phải khớp hoàn toàn với create_hole
+            safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in hole_name).strip()
+            hole_dir = project_dir / "holes" / safe_name
+            
+            # Nếu thư mục không tồn tại, thử tìm các thư mục có suffix số (ví dụ: Hole_1)
+            if not hole_dir.exists():
+                # Thử tìm bằng cách duyệt qua tất cả thư mục và đọc info
+                found = False
+                holes_dir = project_dir / "holes"
+                if holes_dir.exists():
+                    for item in holes_dir.iterdir():
+                        if item.is_dir():
+                            info_file = item / "hole_info.json"
+                            if info_file.exists():
+                                try:
+                                    with open(info_file, "r", encoding="utf-8") as f:
+                                        info = json.load(f)
+                                        if info.get("name") == hole_name:
+                                            hole_dir = item
+                                            found = True
+                                            break
+                                except:
+                                    pass
+                
+                if not found:
+                    return False
+
+        try:
+            if hole_dir.exists():
+                shutil.rmtree(hole_dir)
+                
+                # Nếu đang là hố khoan hiện tại thì reset
+                if self.current_hole and self.current_hole.get("name") == hole_name:
+                    self.current_hole = None
+                
+                self._update_project_timestamp()
+                return True
+        except Exception as e:
+            print(f"Lỗi khi xóa hố khoan {hole_name}: {e}")
+            return False
+        
+        return False

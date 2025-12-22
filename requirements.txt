@@ -12,6 +12,9 @@ pyserial==3.5
 # MQTT communication  
 paho-mqtt==2.1.0
 
+# API communication
+requests>=2.31.0
+
 # Development and utility
 setuptools>=57.5.0
 

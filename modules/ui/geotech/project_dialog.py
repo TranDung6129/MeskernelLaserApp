@@ -48,12 +48,15 @@ class ProjectDialog(QDialog):
         
         self.btn_select = button_box.addButton("Chọn", QDialogButtonBox.ButtonRole.AcceptRole)
         self.btn_select.setEnabled(False)
+        self.btn_settings = button_box.addButton("Cấu hình", QDialogButtonBox.ButtonRole.ActionRole)
+        self.btn_settings.setEnabled(False)
         self.btn_delete = button_box.addButton("Xóa", QDialogButtonBox.ButtonRole.ActionRole)
         self.btn_delete.setEnabled(False)
         button_box.addButton("Đóng", QDialogButtonBox.ButtonRole.RejectRole)
         
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
+        self.btn_settings.clicked.connect(self._configure_project)
         self.btn_delete.clicked.connect(self._delete_selected_project)
         
         layout.addWidget(button_box)
@@ -79,6 +82,18 @@ class ProjectDialog(QDialog):
         self.edt_description = QLineEdit()
         self.edt_description.setPlaceholderText("Mô tả ngắn (tùy chọn)")
         form_layout.addRow("Mô tả:", self.edt_description)
+        
+        # API Configuration (optional)
+        layout.addWidget(QLabel("<b>Cấu hình API (tùy chọn):</b>"))
+        
+        self.edt_api_base_url = QLineEdit()
+        self.edt_api_base_url.setPlaceholderText("https://nomin.wintech.io.vn/api")
+        self.edt_api_base_url.setText("https://nomin.wintech.io.vn/api")
+        form_layout.addRow("API Base URL:", self.edt_api_base_url)
+        
+        self.edt_api_project_id = QLineEdit()
+        self.edt_api_project_id.setPlaceholderText("VD: 21 (ID dự án trên website)")
+        form_layout.addRow("API Project ID:", self.edt_api_project_id)
         
         layout.addLayout(form_layout)
         
@@ -108,13 +123,21 @@ class ProjectDialog(QDialog):
             name = project.get('name', 'Không có tên')
             desc = project.get('description', '')
             updated = project.get('updated_at', '')
+            api_project_id = project.get('api_project_id')
             
             # Tạo text đơn giản, không dùng HTML
             text = name
             if desc:
                 text += f" - {desc}"
+            if api_project_id:
+                text += f" [API ID: {api_project_id}]"
             if updated:
-                text += f" (cập nhật: {updated})"
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(updated.replace('Z', '+00:00'))
+                    text += f" (cập nhật: {dt.strftime('%d/%m/%Y')})"
+                except (ValueError, AttributeError):
+                    pass
             
             item.setText(text)
             self.project_list.addItem(item)
@@ -133,6 +156,40 @@ class ProjectDialog(QDialog):
                 description=self.edt_description.text().strip()
             )
             
+            # Lưu cấu hình API nếu có
+            api_base_url = self.edt_api_base_url.text().strip()
+            api_project_id = self.edt_api_project_id.text().strip()
+            
+            if api_base_url or api_project_id:
+                import json
+                from pathlib import Path
+                
+                project_path = Path(project['path'])
+                project_info_file = project_path / "project_info.json"
+                
+                if project_info_file.exists():
+                    with open(project_info_file, 'r', encoding='utf-8') as f:
+                        project_info = json.load(f)
+                    
+                    if api_base_url:
+                        project_info['api_base_url'] = api_base_url
+                    if api_project_id:
+                        try:
+                            project_info['api_project_id'] = int(api_project_id)
+                        except ValueError:
+                            QMessageBox.warning(
+                                self, 
+                                "Cảnh báo", 
+                                f"API Project ID '{api_project_id}' không hợp lệ. Vui lòng nhập số nguyên."
+                            )
+                            project_info['api_project_id'] = None
+                    
+                    with open(project_info_file, 'w', encoding='utf-8') as f:
+                        json.dump(project_info, f, indent=2, ensure_ascii=False)
+                    
+                    # Cập nhật project info trong memory
+                    project.update(project_info)
+            
             # Làm mới danh sách
             self._load_projects()
             
@@ -146,8 +203,12 @@ class ProjectDialog(QDialog):
             # Xóa nội dung đã nhập
             self.edt_project_name.clear()
             self.edt_description.clear()
+            self.edt_api_project_id.clear()
             
-            QMessageBox.information(self, "Thành công", f"Đã tạo dự án '{name}' thành công!")
+            success_msg = f"Đã tạo dự án '{name}' thành công!"
+            if api_project_id:
+                success_msg += f"\nĐã cấu hình API Project ID: {api_project_id}"
+            QMessageBox.information(self, "Thành công", success_msg)
             
         except Exception as e:
             QMessageBox.critical(self, "Lỗi", f"Không thể tạo dự án: {str(e)}")
@@ -172,7 +233,7 @@ class ProjectDialog(QDialog):
         
         if reply == QMessageBox.StandardButton.Yes:
             try:
-                # TODO: Thực hiện xóa thư mục dự án
+                # Xóa toàn bộ thư mục dự án
                 import shutil
                 import os
                 
@@ -189,7 +250,24 @@ class ProjectDialog(QDialog):
         """Xử lý sự kiện chọn dự án"""
         has_selection = bool(self.project_list.selectedItems())
         self.btn_select.setEnabled(has_selection)
+        self.btn_settings.setEnabled(has_selection)
         self.btn_delete.setEnabled(has_selection)
+    
+    def _configure_project(self):
+        """Mở hộp thoại cấu hình dự án"""
+        selected = self.get_selected_project()
+        if not selected:
+            return
+        
+        # Load project vào project_manager
+        self.project_manager.load_project(selected['path'])
+        
+        # Mở dialog cấu hình
+        from .project_settings_dialog import ProjectSettingsDialog
+        dialog = ProjectSettingsDialog(self.project_manager, self)
+        if dialog.exec():
+            # Làm mới danh sách để hiển thị thông tin mới
+            self._load_projects()
     
     def _on_project_selected(self, item):
         """Xử lý sự kiện chọn nhanh dự án"""

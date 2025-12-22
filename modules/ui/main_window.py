@@ -136,6 +136,9 @@ class BluetoothMainWindow(QMainWindow):
         self.tab_widget.addTab(self.mqtt_panel, "MQTT")
         self.tab_widget.addTab(self.geotech_panel, "Phân Tích Khoan")
         
+        # Kết nối geotech panel với mqtt panel để cập nhật drilling data
+        self.geotech_panel.mqtt_panel = self.mqtt_panel
+        
         splitter.addWidget(self.tab_widget)
         
         # Set collapsible properties after widgets are added

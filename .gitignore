@@ -168,3 +168,6 @@ temp_*.csv
 *.bak
 *.backup
 *~
+# User project data (không commit data của người dùng)
+projects/*
+!projects/.gitkeep

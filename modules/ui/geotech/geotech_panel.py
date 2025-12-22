@@ -6,16 +6,32 @@ Kèm form nhập thông tin hố khoan và lưu dữ liệu theo từng hố kho
 from __future__ import annotations
 
 import time
+import sys
+import os
 from typing import Dict, Any, List, Optional
 
 from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QSizePolicy, QMessageBox
+
+# Thêm path để import API module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from .geotech_charts import GeotechChartsWidget
 from .geotech_form import GeotechFormWidget
 from .geotech_stats import GeotechStatsWidget
 from .geotech_popout import GeotechPopoutManager
 from .geotech_utils import GeotechUtils
+
+try:
+    from modules.api.holes_api import HolesAPIClient
+    from modules.api.drilling_data_service import DrillingDataService
+    from modules.api.gnss_location_service import GNSSLocationService
+    API_AVAILABLE = True
+except ImportError:
+    API_AVAILABLE = False
+    HolesAPIClient = None
+    DrillingDataService = None
+    GNSSLocationService = None
 
 
 class GeotechPanel(QWidget):
@@ -48,6 +64,13 @@ class GeotechPanel(QWidget):
 		self._last_redraw_ts: float = 0.0
 		self.hist_update_interval_s: float = 1.0
 		self._hist_last_update_ts: float = 0.0
+		
+		# API service để gửi drilling data
+		self.drilling_data_service: Optional[DrillingDataService] = None
+		self.api_client: Optional[HolesAPIClient] = None
+		
+		# Reference đến MQTT panel để cập nhật drilling data cho GNSS service
+		self.mqtt_panel = None
 
 	def _setup_ui(self):
 		layout = QVBoxLayout(self)
@@ -94,6 +117,8 @@ class GeotechPanel(QWidget):
 		
 		# Form widget signals
 		self.form_widget.session_started.connect(self._on_session_started)
+		self.form_widget.recording_started.connect(self._on_recording_started)
+		self.form_widget.recording_stopped.connect(self._on_recording_stopped)
 		self.form_widget.on_save_requested = self._on_save_requested
 		self.form_widget.on_export_requested = self._on_export_requested
 
@@ -137,6 +162,18 @@ class GeotechPanel(QWidget):
 				self.time_series.append(ts)
 				self.quality_series.append(quality if quality is not None else 0)
 				self.state_series.append(state if state is not None else "")
+				
+				# Gửi dữ liệu lên API nếu có service
+				if self.drilling_data_service:
+					self.drilling_data_service.add_velocity_data(
+						velocity_ms=velocity_ms,
+						depth_m=depth_m,
+						timestamp=ts
+					)
+				
+				# Cập nhật dữ liệu tốc độ khoan cho GNSS Location Service (nếu đang chạy trong MQTT panel)
+				if self.mqtt_panel and hasattr(self.mqtt_panel, 'set_drilling_data'):
+					self.mqtt_panel.set_drilling_data(velocity_ms, depth_m)
 
 				# Giới hạn số điểm để tránh lag UI
 				if len(self.depth_series_m) > self.max_points:
@@ -235,6 +272,98 @@ class GeotechPanel(QWidget):
 		
 		# Reset thống kê khi bắt đầu phiên mới
 		self._reset_statistics()
+	
+	def _on_recording_started(self, settings: Dict[str, Any]):
+		"""Xử lý khi bắt đầu recording - khởi tạo API service"""
+		if not API_AVAILABLE:
+			return
+		
+		try:
+			# Lấy project và hole info
+			project_manager = self.form_widget.project_manager
+			if not project_manager.current_project or not project_manager.current_hole:
+				return
+			
+			# Lấy API config từ project
+			project_info = project_manager.current_project
+			api_base_url = project_info.get('api_base_url', 'http://localhost:3000/api')
+			api_project_id = project_info.get('api_project_id')
+			
+			if not api_project_id:
+				print("Warning: API project_id not configured")
+				return
+			
+			try:
+				api_project_id = int(api_project_id)
+			except (ValueError, TypeError):
+				print(f"Warning: Invalid API project_id: {api_project_id}")
+				return
+			
+			# Lấy hole info
+			hole_info = project_manager.current_hole
+			api_hole_id = hole_info.get('api_hole_id')
+			
+			# Kiểm tra api_hole_id có hợp lệ không (None, 0, "", False đều không hợp lệ)
+			# Nhưng phải cho phép cả string và số
+			api_hole_id_valid = False
+			if api_hole_id is not None:
+				if isinstance(api_hole_id, str) and api_hole_id.strip():
+					api_hole_id_valid = True
+				elif isinstance(api_hole_id, (int, float)) and api_hole_id != 0:
+					api_hole_id_valid = True
+			
+			if not api_hole_id_valid:
+				# Thử tìm hole trong API bằng hole name
+				api_client = HolesAPIClient(base_url=api_base_url)
+				hole_name = hole_info.get('name', '')
+				if hole_name:
+					try:
+						api_hole = api_client.find_hole_by_hole_id(api_project_id, hole_name)
+						if api_hole:
+							# Ưu tiên dùng hole_id string nếu có, nếu không thì dùng database id
+							api_hole_id = api_hole.get('hole_id') or api_hole.get('id')
+							if api_hole_id:
+								# Lưu lại vào hole_info
+								hole_info['api_hole_id'] = api_hole_id
+								api_hole_id_valid = True
+					except Exception as e:
+						print(f"Error finding hole by name: {e}")
+			
+			if not api_hole_id_valid:
+				print(f"Warning: API hole_id not found. Hole name: {hole_info.get('name', 'Unknown')}, api_hole_id: {api_hole_id}")
+				return
+			
+			# Khởi tạo API client và service
+			self.api_client = HolesAPIClient(base_url=api_base_url)
+			self.drilling_data_service = DrillingDataService(
+				api_client=self.api_client,
+				project_id=api_project_id,
+				hole_id=api_hole_id
+			)
+			
+			# Bắt đầu service
+			self.drilling_data_service.start()
+			print(f"Drilling data service started for project {api_project_id}, hole {api_hole_id}")
+			
+			# Lưu ý: GNSS Location Service được quản lý trong tab MQTT, không khởi động ở đây
+			
+		except Exception as e:
+			print(f"Error starting drilling data service: {e}")
+			self.drilling_data_service = None
+	
+	def _on_recording_stopped(self):
+		"""Xử lý khi dừng recording - dừng API service"""
+		if self.drilling_data_service:
+			try:
+				self.drilling_data_service.stop()
+				stats = self.drilling_data_service.get_stats()
+				print(f"Drilling data service stopped. Stats: {stats}")
+			except Exception as e:
+				print(f"Error stopping drilling data service: {e}")
+			finally:
+				self.drilling_data_service = None
+		
+		# Lưu ý: GNSS Location Service được quản lý trong tab MQTT, không dừng ở đây
 
 	def _on_save_requested(self):
 		"""Xử lý khi yêu cầu lưu dữ liệu CSV"""
